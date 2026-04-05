@@ -1,0 +1,44 @@
+# kubeinit version matrix
+#
+# This file defines the default component versions used during installation.
+# kubeinit reads this file at build time to set compiled-in defaults.
+# Override individual versions at runtime with CLI flags (e.g. --kubernetes-version).
+#
+# To update: change the version here, then rebuild with `cargo build --release`.
+# All versions should point to stable releases — no alpha/beta/rc.
+
+[kubernetes]
+# kubeadm, kubelet, kubectl — downloaded from dl.k8s.io
+# Release notes: https://github.com/kubernetes/kubernetes/releases
+version = "1.35.3"
+
+[containerd]
+# Container runtime — downloaded from GitHub containerd/containerd
+# Release notes: https://github.com/containerd/containerd/releases
+version = "2.2.2"
+
+[runc]
+# OCI runtime — downloaded from GitHub opencontainers/runc
+# Release notes: https://github.com/opencontainers/runc/releases
+version = "1.4.2"
+
+[cni-plugins]
+# Standard CNI plugins — downloaded from GitHub containernetworking/plugins
+# Release notes: https://github.com/containernetworking/plugins/releases
+version = "1.9.1"
+
+[crictl]
+# CRI CLI tool — downloaded from GitHub kubernetes-sigs/cri-tools
+# Release notes: https://github.com/kubernetes-sigs/cri-tools/releases
+# Should track the same minor version as Kubernetes.
+version = "1.35.0"
+
+[helm]
+# Kubernetes package manager — downloaded from get.helm.sh
+# Release notes: https://github.com/helm/helm/releases
+version = "4.1.3"
+
+[cilium-cli]
+# Cilium CLI for CNI installation and management — downloaded from GitHub cilium/cilium-cli
+# Release notes: https://github.com/cilium/cilium-cli/releases
+version = "0.19.2"

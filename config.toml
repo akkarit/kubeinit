@@ -1,0 +1,50 @@
+# kubeinit default configuration
+#
+# This file defines install paths, download URL templates, network defaults,
+# and runtime settings compiled into the binary at build time.
+#
+# URL templates support {version} and {arch} placeholders, expanded at runtime.
+#
+# To customise for a different environment (e.g. air-gapped mirror, non-standard
+# paths), edit this file and rebuild with `cargo build --release`.
+
+# ── Network defaults ─────────────────────────────────────────────────────────
+
+[network]
+pod_cidr     = "10.244.0.0/16"
+service_cidr = "10.96.0.0/12"
+
+# ── Container runtime ────────────────────────────────────────────────────────
+
+[runtime]
+containerd_socket = "unix:///run/containerd/containerd.sock"
+
+# ── Filesystem paths ─────────────────────────────────────────────────────────
+
+[paths]
+bin_dir              = "/usr/local/bin"
+sbin_dir             = "/usr/local/sbin"
+cni_bin_dir          = "/opt/cni/bin"
+cni_conf_dir         = "/etc/cni/net.d"
+containerd_conf_dir  = "/etc/containerd"
+kubernetes_conf_dir  = "/etc/kubernetes"
+kubelet_data_dir     = "/var/lib/kubelet"
+etcd_data_dir        = "/var/lib/etcd"
+containerd_data_dir  = "/var/lib/containerd"
+containerd_run_dir   = "/run/containerd"
+systemd_unit_dir     = "/usr/lib/systemd/system"
+crictl_config        = "/etc/crictl.yaml"
+
+# ── Download URL templates ───────────────────────────────────────────────────
+# Placeholders: {version} (without leading "v"), {arch} ("amd64" or "arm64")
+
+[urls]
+containerd         = "https://github.com/containerd/containerd/releases/download/v{version}/containerd-{version}-linux-{arch}.tar.gz"
+containerd_service = "https://raw.githubusercontent.com/containerd/containerd/v{version}/containerd.service"
+runc               = "https://github.com/opencontainers/runc/releases/download/v{version}/runc.{arch}"
+cni_plugins        = "https://github.com/containernetworking/plugins/releases/download/v{version}/cni-plugins-linux-{arch}-v{version}.tgz"
+crictl             = "https://github.com/kubernetes-sigs/cri-tools/releases/download/v{version}/crictl-v{version}-linux-{arch}.tar.gz"
+kubernetes         = "https://dl.k8s.io/release/v{version}/bin/linux/{arch}"
+helm               = "https://get.helm.sh/helm-v{version}-linux-{arch}.tar.gz"
+cilium_cli         = "https://github.com/cilium/cilium-cli/releases/download/v{version}/cilium-linux-{arch}.tar.gz"
+cilium_helm_repo   = "https://helm.cilium.io/"
