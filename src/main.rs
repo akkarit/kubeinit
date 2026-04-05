@@ -4,6 +4,7 @@ mod cni;
 mod config;
 mod deps;
 mod net;
+mod storage;
 
 use std::io::{self, BufRead, Write};
 
@@ -41,12 +42,58 @@ enum Commands {
         #[arg(long)]
         cilium_version: Option<String>,
 
+        /// Enable Kubernetes Gateway API support (installs CRDs and enables Cilium gatewayAPI)
+        #[arg(long, default_value_t = true)]
+        gateway_api: bool,
+
+        /// Longhorn version to install (e.g. 1.11.1)
+        #[arg(long)]
+        longhorn_version: Option<String>,
+
         /// Skip Cilium CNI installation
         #[arg(long, default_value_t = false)]
         skip_cni: bool,
+
+        /// Skip Longhorn storage installation
+        #[arg(long, default_value_t = false)]
+        skip_storage: bool,
     },
-    /// Generate a join command for worker nodes
-    JoinToken,
+    /// Join this node to an existing Kubernetes cluster
+    Join {
+        /// Role to join as: "worker", "control-plane", or "both" (control-plane + worker)
+        #[arg(long, default_value = "worker")]
+        role: String,
+
+        /// Join token (from `kubeinit join-token` on the control plane)
+        #[arg(long)]
+        token: String,
+
+        /// API server endpoint to join (e.g. 192.168.1.100:6443)
+        #[arg(long)]
+        api_server: String,
+
+        /// CA certificate hash (sha256:<hex>, from `kubeinit join-token`)
+        #[arg(long)]
+        ca_cert_hash: String,
+
+        /// Certificate key for control-plane join (from `kubeinit join-token --control-plane`)
+        #[arg(long)]
+        certificate_key: Option<String>,
+
+        /// Kubernetes version to install (e.g. 1.35.3)
+        #[arg(long)]
+        kubernetes_version: Option<String>,
+
+        /// Cilium CLI version (e.g. 0.19.2)
+        #[arg(long)]
+        cilium_version: Option<String>,
+    },
+    /// Generate a join command for worker or control-plane nodes
+    JoinToken {
+        /// Generate a control-plane join token (includes --certificate-key)
+        #[arg(long, default_value_t = false)]
+        control_plane: bool,
+    },
     /// Check prerequisites for cluster initialization
     Preflight,
     /// Reset the cluster (destroy)
@@ -93,7 +140,10 @@ async fn main() -> Result<()> {
             service_cidr,
             kubernetes_version,
             cilium_version,
+            gateway_api,
+            longhorn_version,
             skip_cni,
+            skip_storage,
         } => {
             deps::install_all(
                 kubernetes_version.as_deref(),
@@ -120,15 +170,49 @@ async fn main() -> Result<()> {
                 let cni_config = cni::CiliumConfig {
                     version: cilium_version,
                     pod_cidr: pod_network_cidr,
+                    gateway_api,
                 };
                 cni::install_cilium(&cni_config).await?;
+            }
+
+            if !skip_storage {
+                let storage_config = storage::LonghornConfig {
+                    version: longhorn_version,
+                };
+                storage::install_longhorn(&storage_config).await?;
             }
 
             cluster::print_post_init_summary(&config);
             tracing::info!("Cluster initialization complete!");
         }
-        Commands::JoinToken => {
-            cluster::print_join_command().await?;
+        Commands::Join {
+            role,
+            token,
+            api_server,
+            ca_cert_hash,
+            certificate_key,
+            kubernetes_version,
+            cilium_version,
+        } => {
+            deps::install_all(
+                kubernetes_version.as_deref(),
+                cilium_version.as_deref(),
+            )
+            .await?;
+
+            cluster::preflight_checks().await?;
+
+            let join_config = cluster::JoinConfig {
+                role: role.parse()?,
+                token,
+                api_server,
+                ca_cert_hash,
+                certificate_key,
+            };
+            cluster::join_cluster(&join_config).await?;
+        }
+        Commands::JoinToken { control_plane } => {
+            cluster::print_join_command(control_plane).await?;
         }
         Commands::Preflight => {
             cluster::preflight_checks().await?;

@@ -11,19 +11,25 @@ pub struct CiliumConfig {
     pub version: Option<String>,
     /// Pod CIDR to configure in Cilium.
     pub pod_cidr: String,
+    /// Enable Kubernetes Gateway API support.
+    pub gateway_api: bool,
 }
 
 /// Install Cilium as the cluster CNI using the Cilium CLI.
 ///
 /// If the `cilium` CLI is available it is preferred. Otherwise we fall back to
 /// a Helm-based installation so the tool works on hosts that only have `helm`.
-pub async fn install_cilium(config: &CiliumConfig) -> Result<()> {
+pub async fn install_cilium(cilium_config: &CiliumConfig) -> Result<()> {
+    if cilium_config.gateway_api {
+        install_gateway_api_crds().await?;
+    }
+
     info!("Installing Cilium CNI...");
 
     if cmd::binary_exists("cilium").await {
-        install_via_cli(config).await
+        install_via_cli(cilium_config).await
     } else if cmd::binary_exists("helm").await {
-        install_via_helm(config).await
+        install_via_helm(cilium_config).await
     } else {
         anyhow::bail!(
             "Neither `cilium` CLI nor `helm` found. \
@@ -32,14 +38,30 @@ pub async fn install_cilium(config: &CiliumConfig) -> Result<()> {
     }
 }
 
-async fn install_via_cli(config: &CiliumConfig) -> Result<()> {
+/// Install the Kubernetes Gateway API CRDs (experimental channel, which
+/// includes all resources needed by Cilium).
+async fn install_gateway_api_crds() -> Result<()> {
+    let version = config::DEFAULT_GATEWAY_API_VERSION;
+    let url = config::URL_GATEWAY_API_CRDS.replace("{version}", version);
+
+    info!("Installing Gateway API CRDs v{version}...");
+    cmd::run("kubectl", &["apply", "--server-side=true", "-f", &url]).await?;
+    info!("Gateway API CRDs installed");
+    Ok(())
+}
+
+async fn install_via_cli(cilium_config: &CiliumConfig) -> Result<()> {
     let mut args = vec!["install", "--set", "kubeProxyReplacement=true"];
 
-    let ipam_flag = format!("ipam.operator.clusterPoolIPv4PodCIDRList={}", config.pod_cidr);
+    let ipam_flag = format!("ipam.operator.clusterPoolIPv4PodCIDRList={}", cilium_config.pod_cidr);
     args.extend(["--set", &ipam_flag]);
 
+    if cilium_config.gateway_api {
+        args.extend(["--set", "gatewayAPI.enabled=true"]);
+    }
+
     let version_flag;
-    if let Some(ref v) = config.version {
+    if let Some(ref v) = cilium_config.version {
         version_flag = v.trim_start_matches('v').to_string();
         args.extend(["--version", &version_flag]);
     }
@@ -53,8 +75,7 @@ async fn install_via_cli(config: &CiliumConfig) -> Result<()> {
     Ok(())
 }
 
-async fn install_via_helm(config: &CiliumConfig) -> Result<()> {
-    // Add the Cilium Helm repo
+async fn install_via_helm(cilium_config: &CiliumConfig) -> Result<()> {
     cmd::run(
         "helm",
         &["repo", "add", "cilium", config::URL_CILIUM_HELM_REPO],
@@ -74,12 +95,16 @@ async fn install_via_helm(config: &CiliumConfig) -> Result<()> {
 
     let ipam_flag = format!(
         "ipam.operator.clusterPoolIPv4PodCIDRList={}",
-        config.pod_cidr
+        cilium_config.pod_cidr
     );
     args.extend(["--set", &ipam_flag]);
 
+    if cilium_config.gateway_api {
+        args.extend(["--set", "gatewayAPI.enabled=true"]);
+    }
+
     let version_flag;
-    if let Some(ref v) = config.version {
+    if let Some(ref v) = cilium_config.version {
         version_flag = v.trim_start_matches('v').to_string();
         args.extend(["--version", &version_flag]);
     }

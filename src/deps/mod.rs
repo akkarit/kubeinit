@@ -48,6 +48,12 @@ pub async fn uninstall_all() -> Result<()> {
     cmd::ensure_privilege().await?;
     info!("Uninstalling cluster dependencies...");
 
+    // Uninstall Helm releases while the cluster is still running
+    uninstall_helm_releases().await;
+
+    // Gracefully tear down the cluster before removing binaries
+    stop_cluster_workloads().await;
+
     uninstall_kubernetes_components().await?;
     uninstall_crictl().await?;
     uninstall_cilium_cli().await?;
@@ -55,9 +61,152 @@ pub async fn uninstall_all() -> Result<()> {
     uninstall_cni_plugins().await?;
     uninstall_containerd().await?;
     uninstall_runc().await?;
+    uninstall_data_and_config().await;
 
     info!("All cluster dependencies removed");
     Ok(())
+}
+
+/// Uninstall Helm releases (Longhorn, Cilium) while the API server is still
+/// reachable, so resources are cleaned up properly.
+async fn uninstall_helm_releases() {
+    if !cmd::binary_exists("helm").await {
+        return;
+    }
+
+    info!("Removing Helm releases...");
+    cmd::run("helm", &["uninstall", "longhorn", "-n", "longhorn-system"])
+        .await
+        .ok();
+    cmd::run("helm", &["uninstall", "cilium", "-n", "kube-system"])
+        .await
+        .ok();
+
+    // Remove Gateway API CRDs
+    if cmd::binary_exists("kubectl").await {
+        let version = config::DEFAULT_GATEWAY_API_VERSION;
+        let url = config::URL_GATEWAY_API_CRDS.replace("{version}", version);
+        info!("Removing Gateway API CRDs...");
+        cmd::run("kubectl", &["delete", "-f", &url, "--ignore-not-found"])
+            .await
+            .ok();
+    }
+}
+
+/// Remove leftover data directories, kubeinit-managed configs, and user
+/// kubeconfig after all binaries have been removed.
+async fn uninstall_data_and_config() {
+    info!("Cleaning up data directories and configs...");
+
+    // Longhorn data
+    cmd::run_privileged("rm", &["-rf", "/var/lib/longhorn"]).await.ok();
+
+    // kubeinit-managed kernel module and sysctl configs
+    cmd::run_privileged("rm", &["-f", "/etc/modules-load.d/kubeinit.conf"]).await.ok();
+    cmd::run_privileged("rm", &["-f", "/etc/sysctl.d/99-kubeinit.conf"]).await.ok();
+
+    // User kubeconfig
+    if let Some(user) = cmd::real_user() {
+        let kube_dir = format!("{}/.kube", user.home);
+        cmd::run_privileged("rm", &["-rf", &kube_dir]).await.ok();
+    }
+}
+
+/// Gracefully stop all cluster workloads and control-plane containers before
+/// removing binaries. Each step is best-effort — failures are logged but do
+/// not abort the uninstall.
+async fn stop_cluster_workloads() {
+    // 1. If kubectl is available and a cluster is reachable, try to drain this node
+    if cmd::binary_exists("kubectl").await {
+        let hostname = cmd::run_output("hostname", &[])
+            .await
+            .unwrap_or_default();
+        if !hostname.is_empty() {
+            info!("Draining node {hostname}...");
+            cmd::run(
+                "kubectl",
+                &[
+                    "drain", &hostname,
+                    "--ignore-daemonsets",
+                    "--delete-emptydir-data",
+                    "--force",
+                    "--grace-period=30",
+                    "--timeout=60s",
+                ],
+            )
+            .await
+            .ok();
+        }
+    }
+
+    // 2. Run kubeadm reset to tear down the control plane
+    if cmd::binary_exists("kubeadm").await {
+        info!("Running kubeadm reset...");
+        cmd::run_privileged("kubeadm", &["reset", "--force"]).await.ok();
+    }
+
+    // 3. Stop kubelet service so it doesn't restart containers
+    cmd::run_privileged("systemctl", &["stop", "kubelet"]).await.ok();
+
+    // 4. Stop all remaining containers via crictl, then wait for exit
+    if cmd::binary_exists("crictl").await {
+        info!("Stopping all containers via crictl...");
+
+        // List running container IDs
+        let container_ids = cmd::run_privileged_output("crictl", &["ps", "-q"])
+            .await
+            .unwrap_or_default();
+
+        if !container_ids.is_empty() {
+            // Stop each container (30s grace period)
+            for id in container_ids.lines() {
+                let id = id.trim();
+                if !id.is_empty() {
+                    cmd::run_privileged("crictl", &["stop", "--timeout", "30", id])
+                        .await
+                        .ok();
+                }
+            }
+
+            // Wait for containers to actually exit — poll up to 60s
+            info!("Waiting for containers to exit...");
+            for _ in 0..12 {
+                let remaining = cmd::run_privileged_output("crictl", &["ps", "-q"])
+                    .await
+                    .unwrap_or_default();
+                if remaining.trim().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+
+            // Force-remove any that are still around
+            let stragglers = cmd::run_privileged_output("crictl", &["ps", "-q"])
+                .await
+                .unwrap_or_default();
+            for id in stragglers.lines() {
+                let id = id.trim();
+                if !id.is_empty() {
+                    cmd::run_privileged("crictl", &["rm", "--force", id]).await.ok();
+                }
+            }
+        }
+
+        // Remove all pods (sandboxes)
+        info!("Removing pod sandboxes...");
+        let pod_ids = cmd::run_privileged_output("crictl", &["pods", "-q"])
+            .await
+            .unwrap_or_default();
+        for id in pod_ids.lines() {
+            let id = id.trim();
+            if !id.is_empty() {
+                cmd::run_privileged("crictl", &["stopp", id]).await.ok();
+                cmd::run_privileged("crictl", &["rmp", "--force", id]).await.ok();
+            }
+        }
+
+        info!("All containers and pods stopped");
+    }
 }
 
 // ── containerd ───────────────────────────────────────────────────────────────
@@ -319,7 +468,7 @@ async fn install_cilium_cli(version: Option<&str>) -> Result<()> {
 // ── Uninstall helpers ────────────────────────────────────────────────────────
 
 async fn uninstall_kubernetes_components() -> Result<()> {
-    cmd::run_privileged("systemctl", &["stop", "kubelet"]).await.ok();
+    // kubelet already stopped by stop_cluster_workloads()
     cmd::run_privileged("systemctl", &["disable", "kubelet"]).await.ok();
 
     for component in ["kubeadm", "kubelet", "kubectl"] {

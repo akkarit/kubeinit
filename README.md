@@ -1,17 +1,20 @@
 # kubeinit
 
-A single-binary CLI tool written in Rust that bootstraps vanilla Kubernetes clusters using **kubeadm** with **Cilium** as the default CNI.
+A single-binary CLI tool written in Rust that bootstraps vanilla Kubernetes clusters using **kubeadm** with **Cilium** CNI, **Gateway API**, and **Longhorn** storage out of the box.
 
-kubeinit handles the full lifecycle: installing dependencies, initializing the control plane, deploying Cilium in kube-proxy replacement mode, joining worker nodes, and tearing everything down.
+kubeinit handles the full lifecycle: installing dependencies, initializing the control plane, deploying networking and storage, joining worker and control-plane nodes, and tearing everything down.
 
 ## Features
 
 - **Zero-to-cluster in one command** — automatically downloads and installs all required binaries (containerd, runc, kubeadm, kubelet, kubectl, crictl, Helm, Cilium CLI)
 - **Cilium CNI with kube-proxy replacement** — kube-proxy is skipped during `kubeadm init`; Cilium runs with `kubeProxyReplacement=true`
+- **Gateway API** — installs Kubernetes Gateway API CRDs (experimental channel, server-side apply) and enables Cilium's `gatewayAPI.enabled` by default
+- **Longhorn storage** — installs Longhorn distributed block storage via Helm by default
+- **Multi-node support** — join additional nodes as workers or control-plane members via `kubeinit join`
 - **Auto-detection** — detects the host's default IP and hostname for the control-plane endpoint; confirms interactively or accepts a custom value
 - **Privilege escalation** — runs as root or automatically elevates via `sudo` when needed
-- **Preflight checks** — validates swap, kernel modules (`br_netfilter`, `overlay`), sysctl settings, and required binaries before proceeding
-- **Clean uninstall** — removes all installed binaries, systemd units, configuration, and data directories
+- **Preflight auto-fix** — loads kernel modules (`br_netfilter`, `overlay`), sets sysctl parameters, and persists both across reboots
+- **Clean uninstall** — gracefully drains the node, stops all containers, then removes binaries, systemd units, configuration, and data directories
 
 ## Requirements
 
@@ -41,18 +44,55 @@ kubeinit init \
   --pod-network-cidr 10.244.0.0/16 \
   --service-cidr 10.96.0.0/12 \
   --kubernetes-version 1.35.3 \
-  --cilium-version 0.19.2
+  --cilium-version 0.19.2 \
+  --longhorn-version 1.11.1
+
+# Skip optional components
+kubeinit init --skip-cni --skip-storage --gateway-api=false
 ```
 
 The `init` command will:
 
 1. Install all required dependencies (skipping any already present)
 2. Detect and confirm the control-plane endpoint
-3. Run preflight checks
+3. Run preflight checks (auto-fixes kernel modules and sysctl)
 4. Run `kubeadm init` (with kube-proxy skipped)
-5. Copy the admin kubeconfig to `~/.kube/config`
-6. Install Cilium CNI (via `cilium` CLI or Helm fallback)
-7. Print a summary of installed binaries, credentials, and config paths
+5. Copy the admin kubeconfig to `~/.kube/config` (owned by the invoking user, not root)
+6. Install Gateway API CRDs (server-side apply)
+7. Install Cilium CNI with Gateway API enabled
+8. Install Longhorn distributed storage
+9. Print a summary of installed binaries, credentials, and config paths
+
+### Join nodes to the cluster
+
+On the **control plane**, generate a join token:
+
+```bash
+# Worker join token
+kubeinit join-token
+
+# Control-plane join token (includes certificate key)
+kubeinit join-token --control-plane
+```
+
+On the **joining node**, run:
+
+```bash
+# Join as a worker
+kubeinit join --role worker \
+  --api-server 192.168.1.100:6443 \
+  --token abcdef.0123456789abcdef \
+  --ca-cert-hash sha256:...
+
+# Join as a control-plane node
+kubeinit join --role control-plane \
+  --api-server 192.168.1.100:6443 \
+  --token abcdef.0123456789abcdef \
+  --ca-cert-hash sha256:... \
+  --certificate-key abc123...
+```
+
+The `join` command automatically installs dependencies and runs preflight checks before joining.
 
 ### Install dependencies only
 
@@ -66,16 +106,6 @@ kubeinit install-deps --kubernetes-version 1.35.3 --cilium-version 0.19.2
 ```bash
 kubeinit preflight
 ```
-
-### Join worker nodes
-
-Run on the control plane to get the join command:
-
-```bash
-kubeinit join-token
-```
-
-Then run the printed `kubeadm join ...` command on each worker node.
 
 ### Check cluster status
 
@@ -98,31 +128,38 @@ kubeinit uninstall         # interactive confirmation
 kubeinit uninstall --force # skip confirmation
 ```
 
-Removes all binaries, systemd units, and data directories installed by kubeinit:
+Gracefully drains the node, stops all containers via crictl, runs `kubeadm reset`, then removes all binaries, systemd units, and data directories.
 
-Default versions are defined in [`versions.toml`](versions.toml):
+## Default Versions
+
+All versions are defined in [`versions.toml`](versions.toml). Paths, URLs, and network defaults are in [`config.toml`](config.toml). Both are compiled into the binary at build time via `build.rs`.
 
 | Component | Default Version |
 |-----------|----------------|
+| Kubernetes (kubeadm, kubelet, kubectl) | 1.35.3 |
 | containerd | 2.2.2 |
 | runc | 1.4.2 |
 | CNI plugins | 1.9.1 |
 | crictl | 1.35.0 |
-| kubeadm, kubelet, kubectl | 1.35.3 |
 | Helm | 4.1.3 |
 | Cilium CLI | 0.19.2 |
+| Gateway API CRDs | 1.5.1 |
+| Longhorn | 1.11.1 |
 
 ## Project Structure
 
 ```
-├── versions.toml  # Version matrix — single source of truth for all component versions
-├── build.rs       # Generates Rust constants from versions.toml at compile time
+├── versions.toml  # Version matrix for all components
+├── config.toml    # Paths, URLs, and network defaults
+├── build.rs       # Generates Rust constants from versions.toml + config.toml
 └── src/
     ├── main.rs    # CLI definition (clap) and command dispatch
-    ├── cmd/       # Shell command execution helpers (run, run_privileged, etc.)
-    ├── cluster/   # Cluster lifecycle: preflight, init, reset, status, join-token
-    ├── cni/       # Cilium installation (cilium CLI preferred, Helm fallback)
-    ├── deps/      # Dependency download and installation/uninstallation
+    ├── config.rs  # Re-exports generated constants
+    ├── cmd/       # Shell command execution (run, run_privileged, real_user, etc.)
+    ├── cluster/   # Cluster lifecycle: preflight, init, join, reset, status, join-token
+    ├── cni/       # Cilium CNI + Gateway API CRD installation
+    ├── storage/   # Longhorn distributed storage installation
+    ├── deps/      # Dependency download, installation, and uninstallation
     └── net/       # Network detection (default IP, hostname)
 ```
 
