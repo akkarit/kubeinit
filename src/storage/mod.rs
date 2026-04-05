@@ -17,6 +17,8 @@ pub async fn install_longhorn(longhorn_config: &LonghornConfig) -> Result<()> {
         anyhow::bail!("helm is required to install Longhorn");
     }
 
+    install_iscsi().await?;
+
     let version = longhorn_config
         .version
         .as_deref()
@@ -80,5 +82,44 @@ pub async fn install_longhorn(longhorn_config: &LonghornConfig) -> Result<()> {
     .await?;
 
     info!("Longhorn v{version} installed successfully");
+    Ok(())
+}
+
+/// Install and enable open-iscsi, which Longhorn requires for block device
+/// access. Supports apt, dnf/yum, and zypper based distros.
+async fn install_iscsi() -> Result<()> {
+    if cmd::binary_exists("iscsiadm").await {
+        info!("open-iscsi already installed");
+        // Ensure the service is running
+        cmd::run_privileged("systemctl", &["enable", "--now", "iscsid"]).await.ok();
+        return Ok(());
+    }
+
+    info!("Installing open-iscsi (required by Longhorn)...");
+
+    if cmd::binary_exists("apt-get").await {
+        cmd::run_privileged("apt-get", &["update", "-qq"]).await?;
+        cmd::run_privileged(
+            "apt-get",
+            &["install", "-y", "-qq", "open-iscsi"],
+        )
+        .await?;
+    } else if cmd::binary_exists("dnf").await {
+        cmd::run_privileged("dnf", &["install", "-y", "iscsi-initiator-utils"]).await?;
+    } else if cmd::binary_exists("yum").await {
+        cmd::run_privileged("yum", &["install", "-y", "iscsi-initiator-utils"]).await?;
+    } else if cmd::binary_exists("zypper").await {
+        cmd::run_privileged("zypper", &["install", "-y", "open-iscsi"]).await?;
+    } else if cmd::binary_exists("pacman").await {
+        cmd::run_privileged("pacman", &["-S", "--noconfirm", "open-iscsi"]).await?;
+    } else {
+        anyhow::bail!(
+            "Could not detect package manager to install open-iscsi. \
+             Install it manually and re-run."
+        );
+    }
+
+    cmd::run_privileged("systemctl", &["enable", "--now", "iscsid"]).await?;
+    info!("open-iscsi installed and iscsid enabled");
     Ok(())
 }

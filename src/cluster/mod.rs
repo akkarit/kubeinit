@@ -150,6 +150,22 @@ pub async fn init_cluster(config: &ClusterConfig) -> Result<()> {
     // Set up kubeconfig for the current user
     setup_kubeconfig().await?;
 
+    // Remove the control-plane NoSchedule taint so workloads (Longhorn,
+    // user pods) can be scheduled on single-node or small clusters.
+    let hostname = cmd::run_output("hostname", &[]).await.unwrap_or_default();
+    if !hostname.is_empty() {
+        info!("Removing NoSchedule taint from {hostname}...");
+        cmd::run(
+            "kubectl",
+            &[
+                "taint", "nodes", &hostname,
+                "node-role.kubernetes.io/control-plane:NoSchedule-",
+            ],
+        )
+        .await
+        .ok();
+    }
+
     info!("kubeadm init completed successfully");
     Ok(())
 }

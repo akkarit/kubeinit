@@ -8,8 +8,9 @@ kubeinit handles the full lifecycle: installing dependencies, initializing the c
 
 - **Zero-to-cluster in one command** — automatically downloads and installs all required binaries (containerd, runc, kubeadm, kubelet, kubectl, crictl, Helm, Cilium CLI)
 - **Cilium CNI with kube-proxy replacement** — kube-proxy is skipped during `kubeadm init`; Cilium runs with `kubeProxyReplacement=true`
-- **Gateway API** — installs Kubernetes Gateway API CRDs (experimental channel, server-side apply) and enables Cilium's `gatewayAPI.enabled` by default
-- **Longhorn storage** — installs Longhorn distributed block storage via Helm by default
+- **Gateway API** — installs Kubernetes Gateway API CRDs (experimental channel, server-side apply) and enables Cilium's Gateway API with host-network mode by default
+- **Longhorn storage** — installs Longhorn distributed block storage via Helm by default; automatically installs open-iscsi host dependency
+- **Single-node ready** — removes the control-plane NoSchedule taint so workloads can run on the initial node
 - **Multi-node support** — join additional nodes as workers or control-plane members via `kubeinit join`
 - **Auto-detection** — detects the host's default IP and hostname for the control-plane endpoint; confirms interactively or accepts a custom value
 - **Privilege escalation** — runs as root or automatically elevates via `sudo` when needed
@@ -57,11 +58,12 @@ The `init` command will:
 2. Detect and confirm the control-plane endpoint
 3. Run preflight checks (auto-fixes kernel modules and sysctl)
 4. Run `kubeadm init` (with kube-proxy skipped)
-5. Copy the admin kubeconfig to `~/.kube/config` (owned by the invoking user, not root)
-6. Install Gateway API CRDs (server-side apply)
-7. Install Cilium CNI with Gateway API enabled
-8. Install Longhorn distributed storage
-9. Print a summary of installed binaries, credentials, and config paths
+5. Remove the control-plane NoSchedule taint (single-node ready)
+6. Copy the admin kubeconfig to `~/.kube/config` (owned by the invoking user, not root)
+7. Install Gateway API CRDs (server-side apply)
+8. Install Cilium CNI with Gateway API host-network mode
+9. Install open-iscsi and Longhorn distributed storage
+10. Print a summary of installed binaries, credentials, and config paths
 
 ### Join nodes to the cluster
 
@@ -119,7 +121,7 @@ kubeinit status
 kubeinit reset --force
 ```
 
-Runs `kubeadm reset`, removes CNI configuration, and flushes iptables rules.
+Uninstalls Helm releases (Longhorn, Cilium), deletes Gateway API CRDs, drains the node, runs `kubeadm reset`, cleans up iptables/ipvs, and removes data directories and kubeinit-managed configs.
 
 ### Uninstall all components
 

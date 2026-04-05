@@ -57,7 +57,10 @@ async fn install_via_cli(cilium_config: &CiliumConfig) -> Result<()> {
     args.extend(["--set", &ipam_flag]);
 
     if cilium_config.gateway_api {
-        args.extend(["--set", "gatewayAPI.enabled=true"]);
+        args.extend([
+            "--set", "gatewayAPI.enabled=true",
+            "--set", "gatewayAPI.hostNetwork.enabled=true",
+        ]);
     }
 
     let version_flag;
@@ -100,7 +103,10 @@ async fn install_via_helm(cilium_config: &CiliumConfig) -> Result<()> {
     args.extend(["--set", &ipam_flag]);
 
     if cilium_config.gateway_api {
-        args.extend(["--set", "gatewayAPI.enabled=true"]);
+        args.extend([
+            "--set", "gatewayAPI.enabled=true",
+            "--set", "gatewayAPI.hostNetwork.enabled=true",
+        ]);
     }
 
     let version_flag;
