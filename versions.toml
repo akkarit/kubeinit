@@ -43,10 +43,10 @@ version = "4.1.3"
 # Release notes: https://github.com/cilium/cilium-cli/releases
 version = "0.19.2"
 
-[longhorn]
-# Distributed block storage for Kubernetes — installed via Helm
-# Release notes: https://github.com/longhorn/longhorn/releases
-version = "1.11.1"
+[openebs-localpv]
+# Dynamic LocalPV Provisioner for Kubernetes — installed via Helm
+# Release notes: https://github.com/openebs/dynamic-localpv-provisioner/releases
+version = "4.4.0"
 
 [gateway-api]
 # Kubernetes Gateway API CRDs — downloaded from GitHub kubernetes-sigs/gateway-api

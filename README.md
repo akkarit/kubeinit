@@ -1,6 +1,6 @@
 # kubeinit
 
-A single-binary CLI tool written in Rust that bootstraps vanilla Kubernetes clusters using **kubeadm** with **Cilium** CNI, **Gateway API**, and **Longhorn** storage out of the box.
+A single-binary CLI tool written in Rust that bootstraps vanilla Kubernetes clusters using **kubeadm** with **Cilium** CNI, **Gateway API**, and **OpenEBS LocalPV** storage out of the box.
 
 kubeinit handles the full lifecycle: installing dependencies, initializing the control plane, deploying networking and storage, joining worker and control-plane nodes, and tearing everything down.
 
@@ -9,7 +9,7 @@ kubeinit handles the full lifecycle: installing dependencies, initializing the c
 - **Zero-to-cluster in one command** — automatically downloads and installs all required binaries (containerd, runc, kubeadm, kubelet, kubectl, crictl, Helm, Cilium CLI)
 - **Cilium CNI with kube-proxy replacement** — kube-proxy is skipped during `kubeadm init`; Cilium runs with `kubeProxyReplacement=true`
 - **Gateway API** — installs Kubernetes Gateway API CRDs (experimental channel, server-side apply) and enables Cilium's Gateway API with host-network mode by default
-- **Longhorn storage** — installs Longhorn distributed block storage via Helm by default; automatically installs open-iscsi host dependency
+- **OpenEBS LocalPV storage** — installs OpenEBS Dynamic LocalPV Provisioner via Helm by default (hostpath-based local storage with default StorageClass)
 - **Single-node ready** — removes the control-plane NoSchedule taint so workloads can run on the initial node
 - **Multi-node support** — join additional nodes as workers or control-plane members via `kubeinit join`
 - **Auto-detection** — detects the host's default IP and hostname for the control-plane endpoint; confirms interactively or accepts a custom value
@@ -46,7 +46,7 @@ kubeinit init \
   --service-cidr 10.96.0.0/12 \
   --kubernetes-version 1.35.3 \
   --cilium-version 0.19.2 \
-  --longhorn-version 1.11.1
+  --storage-version 4.4.0
 
 # Skip optional components
 kubeinit init --skip-cni --skip-storage --gateway-api=false
@@ -62,7 +62,7 @@ The `init` command will:
 6. Copy the admin kubeconfig to `~/.kube/config` (owned by the invoking user, not root)
 7. Install Gateway API CRDs (server-side apply)
 8. Install Cilium CNI with Gateway API host-network mode
-9. Install open-iscsi and Longhorn distributed storage
+9. Install OpenEBS Dynamic LocalPV Provisioner storage
 10. Print a summary of installed binaries, credentials, and config paths
 
 ### Join nodes to the cluster
@@ -121,7 +121,7 @@ kubeinit status
 kubeinit reset --force
 ```
 
-Uninstalls Helm releases (Longhorn, Cilium), deletes Gateway API CRDs, drains the node, runs `kubeadm reset`, cleans up iptables/ipvs, and removes data directories and kubeinit-managed configs.
+Uninstalls Helm releases (OpenEBS, Cilium), deletes Gateway API CRDs, drains the node, runs `kubeadm reset`, cleans up iptables/ipvs, and removes data directories and kubeinit-managed configs.
 
 ### Uninstall all components
 
@@ -146,7 +146,7 @@ All versions are defined in [`versions.toml`](versions.toml). Paths, URLs, and n
 | Helm | 4.1.3 |
 | Cilium CLI | 0.19.2 |
 | Gateway API CRDs | 1.5.1 |
-| Longhorn | 1.11.1 |
+| OpenEBS LocalPV | 4.4.0 |
 
 ## Project Structure
 
@@ -160,7 +160,7 @@ All versions are defined in [`versions.toml`](versions.toml). Paths, URLs, and n
     ├── cmd/       # Shell command execution (run, run_privileged, real_user, etc.)
     ├── cluster/   # Cluster lifecycle: preflight, init, join, reset, status, join-token
     ├── cni/       # Cilium CNI + Gateway API CRD installation
-    ├── storage/   # Longhorn distributed storage installation
+    ├── storage/   # OpenEBS LocalPV Provisioner installation
     ├── deps/      # Dependency download, installation, and uninstallation
     └── net/       # Network detection (default IP, hostname)
 ```

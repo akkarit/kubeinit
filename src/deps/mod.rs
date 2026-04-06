@@ -67,7 +67,7 @@ pub async fn uninstall_all() -> Result<()> {
     Ok(())
 }
 
-/// Uninstall Helm releases (Longhorn, Cilium) while the API server is still
+/// Uninstall Helm releases (OpenEBS, Cilium) while the API server is still
 /// reachable, so resources are cleaned up properly.
 async fn uninstall_helm_releases() {
     if !cmd::binary_exists("helm").await {
@@ -75,7 +75,7 @@ async fn uninstall_helm_releases() {
     }
 
     info!("Removing Helm releases...");
-    cmd::run("helm", &["uninstall", "longhorn", "-n", "longhorn-system"])
+    cmd::run("helm", &["uninstall", "openebs-localpv", "-n", "openebs"])
         .await
         .ok();
     cmd::run("helm", &["uninstall", "cilium", "-n", "kube-system"])
@@ -98,8 +98,8 @@ async fn uninstall_helm_releases() {
 async fn uninstall_data_and_config() {
     info!("Cleaning up data directories and configs...");
 
-    // Longhorn data
-    cmd::run_privileged("rm", &["-rf", "/var/lib/longhorn"]).await.ok();
+    // OpenEBS data
+    cmd::run_privileged("rm", &["-rf", "/var/openebs"]).await.ok();
 
     // kubeinit-managed kernel module and sysctl configs
     cmd::run_privileged("rm", &["-f", "/etc/modules-load.d/kubeinit.conf"]).await.ok();

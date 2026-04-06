@@ -46,15 +46,15 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         gateway_api: bool,
 
-        /// Longhorn version to install (e.g. 1.11.1)
+        /// OpenEBS LocalPV Provisioner version to install (e.g. 4.4.0)
         #[arg(long)]
-        longhorn_version: Option<String>,
+        storage_version: Option<String>,
 
         /// Skip Cilium CNI installation
         #[arg(long, default_value_t = false)]
         skip_cni: bool,
 
-        /// Skip Longhorn storage installation
+        /// Skip storage provisioner installation
         #[arg(long, default_value_t = false)]
         skip_storage: bool,
     },
@@ -141,7 +141,7 @@ async fn main() -> Result<()> {
             kubernetes_version,
             cilium_version,
             gateway_api,
-            longhorn_version,
+            storage_version,
             skip_cni,
             skip_storage,
         } => {
@@ -176,10 +176,10 @@ async fn main() -> Result<()> {
             }
 
             if !skip_storage {
-                let storage_config = storage::LonghornConfig {
-                    version: longhorn_version,
+                let storage_config = storage::StorageConfig {
+                    version: storage_version,
                 };
-                storage::install_longhorn(&storage_config).await?;
+                storage::install_storage(&storage_config).await?;
             }
 
             cluster::print_post_init_summary(&config);

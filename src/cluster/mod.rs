@@ -172,22 +172,6 @@ pub async fn init_cluster(config: &ClusterConfig) -> Result<()> {
     // Set up kubeconfig for the current user
     setup_kubeconfig().await?;
 
-    // Remove the control-plane NoSchedule taint so workloads (Longhorn,
-    // user pods) can be scheduled on single-node or small clusters.
-    let hostname = cmd::run_output("hostname", &[]).await.unwrap_or_default();
-    if !hostname.is_empty() {
-        info!("Removing NoSchedule taint from {hostname}...");
-        cmd::run(
-            "kubectl",
-            &[
-                "taint", "nodes", &hostname,
-                "node-role.kubernetes.io/control-plane:NoSchedule-",
-            ],
-        )
-        .await
-        .ok();
-    }
-
     info!("kubeadm init completed successfully");
     Ok(())
 }
@@ -352,10 +336,10 @@ pub async fn reset_cluster(force: bool) -> Result<()> {
 
     info!("Resetting cluster...");
 
-    // 1. Uninstall Helm releases (Longhorn, Cilium) while the API server is up
+    // 1. Uninstall Helm releases (OpenEBS, Cilium) while the API server is up
     if cmd::binary_exists("helm").await {
         info!("Removing Helm releases...");
-        cmd::run("helm", &["uninstall", "longhorn", "-n", "longhorn-system"])
+        cmd::run("helm", &["uninstall", "openebs-localpv", "-n", "openebs"])
             .await
             .ok();
         cmd::run("helm", &["uninstall", "cilium", "-n", "kube-system"])
@@ -408,10 +392,10 @@ pub async fn reset_cluster(force: bool) -> Result<()> {
     cmd::run_privileged("iptables", &["-X"]).await.ok();
     cmd::run_privileged("ipvsadm", &["-C"]).await.ok();
 
-    // 7. Clean up Kubernetes and Longhorn data directories
+    // 7. Clean up Kubernetes and OpenEBS data directories
     cmd::run_privileged("rm", &["-rf", config::PATH_KUBELET_DATA_DIR]).await.ok();
     cmd::run_privileged("rm", &["-rf", config::PATH_KUBERNETES_CONF_DIR]).await.ok();
-    cmd::run_privileged("rm", &["-rf", "/var/lib/longhorn"]).await.ok();
+    cmd::run_privileged("rm", &["-rf", "/var/openebs"]).await.ok();
 
     // 8. Remove kubeinit-managed sysctl and modules-load configs
     cmd::run_privileged("rm", &["-f", "/etc/modules-load.d/kubeinit.conf"]).await.ok();

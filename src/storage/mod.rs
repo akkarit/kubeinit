@@ -4,49 +4,85 @@ use tracing::info;
 use crate::cmd;
 use crate::config;
 
-/// Configuration for the Longhorn installation.
+/// Configuration for the OpenEBS LocalPV Provisioner installation.
 #[derive(Debug)]
-pub struct LonghornConfig {
-    /// Longhorn Helm chart version. `None` means the version from versions.toml.
+pub struct StorageConfig {
+    /// OpenEBS LocalPV Helm chart version. `None` means the version from versions.toml.
     pub version: Option<String>,
 }
 
-/// Install Longhorn distributed storage via Helm.
-pub async fn install_longhorn(longhorn_config: &LonghornConfig) -> Result<()> {
-    if !cmd::binary_exists("helm").await {
-        anyhow::bail!("helm is required to install Longhorn");
+/// Remove the control-plane NoSchedule taint so workloads (storage, user pods)
+/// can be scheduled on single-node or small clusters, then verify removal.
+async fn ensure_control_plane_schedulable() -> Result<()> {
+    // Use kubectl to get the node name — more reliable than the hostname
+    // command, which may not be installed or may return a value that doesn't
+    // match the Kubernetes node name.
+    let hostname = cmd::run_output(
+        "kubectl",
+        &["get", "nodes", "-o", "jsonpath={.items[0].metadata.name}"],
+    )
+    .await
+    .unwrap_or_default();
+    if hostname.is_empty() {
+        anyhow::bail!("Could not determine node name for taint removal");
     }
 
-    install_iscsi().await?;
+    info!("Removing NoSchedule taint from {hostname}...");
+    // The command succeeds even if the taint is already absent (trailing '-').
+    cmd::run(
+        "kubectl",
+        &[
+            "taint", "nodes", &hostname,
+            "node-role.kubernetes.io/control-plane:NoSchedule-",
+        ],
+    )
+    .await
+    .ok();
 
-    let version = longhorn_config
+    // Verify the taint is actually gone.
+    let taints = cmd::run_output(
+        "kubectl",
+        &[
+            "get", "node", &hostname,
+            "-o", "jsonpath={.spec.taints}",
+        ],
+    )
+    .await
+    .unwrap_or_default();
+
+    if taints.contains("NoSchedule") {
+        anyhow::bail!(
+            "Control-plane NoSchedule taint still present on {hostname} after removal attempt. \
+             Storage pods would not be schedulable."
+        );
+    }
+
+    info!("Verified: no NoSchedule taint on {hostname}");
+    Ok(())
+}
+
+/// Install OpenEBS Dynamic LocalPV Provisioner via Helm.
+pub async fn install_storage(storage_config: &StorageConfig) -> Result<()> {
+    if !cmd::binary_exists("helm").await {
+        anyhow::bail!("helm is required to install OpenEBS LocalPV Provisioner");
+    }
+
+    ensure_control_plane_schedulable().await?;
+
+    let version = storage_config
         .version
         .as_deref()
-        .unwrap_or(config::DEFAULT_LONGHORN_VERSION);
+        .unwrap_or(config::DEFAULT_OPENEBS_LOCALPV_VERSION);
 
-    info!("Installing Longhorn v{version}...");
+    info!("Installing OpenEBS LocalPV Provisioner v{version}...");
 
-    // Add the Longhorn Helm repo
+    // Add the OpenEBS LocalPV Helm repo
     cmd::run(
         "helm",
-        &["repo", "add", "longhorn", config::URL_LONGHORN_HELM_REPO],
+        &["repo", "add", "openebs-localpv", config::URL_OPENEBS_LOCALPV_HELM_REPO],
     )
     .await?;
     cmd::run("helm", &["repo", "update"]).await?;
-
-    // Create the longhorn-system namespace
-    cmd::run(
-        "kubectl",
-        &["create", "namespace", "longhorn-system", "--dry-run=client", "-o", "yaml"],
-    )
-    .await
-    .ok();
-    cmd::run(
-        "kubectl",
-        &["apply", "-f", "-"],
-    )
-    .await
-    .ok();
 
     // Install via Helm
     let version_trimmed = version.trim_start_matches('v');
@@ -54,72 +90,31 @@ pub async fn install_longhorn(longhorn_config: &LonghornConfig) -> Result<()> {
         "helm",
         &[
             "install",
-            "longhorn",
-            "longhorn/longhorn",
+            "openebs-localpv",
+            "openebs-localpv/localpv-provisioner",
             "--namespace",
-            "longhorn-system",
+            "openebs",
             "--create-namespace",
             "--version",
             version_trimmed,
             "--set",
-            "defaultSettings.defaultDataPath=/var/lib/longhorn",
-            "--set",
-            "persistence.defaultClassReplicaCount=1",
+            "storageClass.isDefaultClass=true",
         ],
     )
     .await?;
 
-    info!("Waiting for Longhorn to become ready...");
+    info!("Waiting for OpenEBS LocalPV Provisioner to become ready...");
     cmd::run(
         "kubectl",
         &[
             "rollout", "status", "deployment",
-            "-n", "longhorn-system",
-            "longhorn-driver-deployer",
+            "-n", "openebs",
+            "openebs-localpv-localpv-provisioner",
             "--timeout=300s",
         ],
     )
     .await?;
 
-    info!("Longhorn v{version} installed successfully");
-    Ok(())
-}
-
-/// Install and enable open-iscsi, which Longhorn requires for block device
-/// access. Supports apt, dnf/yum, and zypper based distros.
-async fn install_iscsi() -> Result<()> {
-    if cmd::binary_exists("iscsiadm").await {
-        info!("open-iscsi already installed");
-        // Ensure the service is running
-        cmd::run_privileged("systemctl", &["enable", "--now", "iscsid"]).await.ok();
-        return Ok(());
-    }
-
-    info!("Installing open-iscsi (required by Longhorn)...");
-
-    if cmd::binary_exists("apt-get").await {
-        cmd::run_privileged("apt-get", &["update", "-qq"]).await?;
-        cmd::run_privileged(
-            "apt-get",
-            &["install", "-y", "-qq", "open-iscsi"],
-        )
-        .await?;
-    } else if cmd::binary_exists("dnf").await {
-        cmd::run_privileged("dnf", &["install", "-y", "iscsi-initiator-utils"]).await?;
-    } else if cmd::binary_exists("yum").await {
-        cmd::run_privileged("yum", &["install", "-y", "iscsi-initiator-utils"]).await?;
-    } else if cmd::binary_exists("zypper").await {
-        cmd::run_privileged("zypper", &["install", "-y", "open-iscsi"]).await?;
-    } else if cmd::binary_exists("pacman").await {
-        cmd::run_privileged("pacman", &["-S", "--noconfirm", "open-iscsi"]).await?;
-    } else {
-        anyhow::bail!(
-            "Could not detect package manager to install open-iscsi. \
-             Install it manually and re-run."
-        );
-    }
-
-    cmd::run_privileged("systemctl", &["enable", "--now", "iscsid"]).await?;
-    info!("open-iscsi installed and iscsid enabled");
+    info!("OpenEBS LocalPV Provisioner v{version} installed successfully");
     Ok(())
 }
