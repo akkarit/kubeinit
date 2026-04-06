@@ -18,9 +18,9 @@ The binary requires root privileges and a real Kubernetes-capable host to run mo
 
 ## Architecture
 
-kubeinit is a CLI tool that orchestrates `kubeadm` to bootstrap vanilla Kubernetes clusters with Cilium CNI, Gateway API, and OpenEBS LocalPV storage.
+kubeinit is a CLI tool that orchestrates `kubeadm` to bootstrap vanilla Kubernetes clusters with Cilium CNI, Gateway API, and OpenEBS RawFile LocalPV storage (Longhorn available as alternative).
 
-**Init order:** deps → preflight → kubeadm init → remove NoSchedule taint → kubeconfig → Gateway API CRDs → Cilium CNI (with Gateway API host-network) → OpenEBS LocalPV storage → summary.
+**Init order:** deps → preflight → kubeadm init → remove NoSchedule taint → kubeconfig → Gateway API CRDs → Cilium CNI (with Gateway API host-network) → storage (RawFile LocalPV by default; or Longhorn with open-iscsi host dep) → summary.
 
 **Module layout:**
 
@@ -29,7 +29,7 @@ kubeinit is a CLI tool that orchestrates `kubeadm` to bootstrap vanilla Kubernet
 - `src/cmd/` — Low-level shell command execution helpers (`run`, `run_privileged`, `run_output`, `binary_exists`, `real_user`). All external process invocation goes through this module. Privileged operations auto-elevate via `sudo` when not root. `real_user()` resolves the invoking user behind sudo for correct file ownership.
 - `src/cluster/` — Kubernetes cluster lifecycle: preflight checks (auto-loads kernel modules, sets sysctl), `kubeadm init`, `kubeadm join` (worker or control-plane), kubeconfig setup with proper ownership, join-token generation, status, and reset.
 - `src/cni/` — Cilium CNI installation (prefers `cilium` CLI, falls back to Helm). Also handles Gateway API CRD installation (server-side apply) and enabling `gatewayAPI.enabled` + `gatewayAPI.hostNetwork.enabled` in Cilium.
-- `src/storage/` — OpenEBS Dynamic LocalPV Provisioner installation via Helm (hostpath-based local storage).
+- `src/storage/` — Storage backend installation via Helm. Default is OpenEBS RawFile LocalPV (lightweight loop-mounted local volumes). Alternative is Longhorn (distributed block storage, installs open-iscsi). Selected via `--storage-backend` flag.
 - `src/deps/` — Dependency installation and uninstallation. Uninstall gracefully drains the node and stops all containers before removing binaries.
 - `src/net/` — Network auto-detection (default IP from routing table, hostname).
 
@@ -37,7 +37,7 @@ kubeinit is a CLI tool that orchestrates `kubeadm` to bootstrap vanilla Kubernet
 
 - kube-proxy is **skipped** during `kubeadm init` (`--skip-phases addon/kube-proxy`) because Cilium runs with `kubeProxyReplacement=true`.
 - Gateway API CRDs use `kubectl apply --server-side=true` because the CRDs are too large for client-side apply. Gateway API runs in host-network mode so envoy proxies bind directly to node IPs.
-- The control-plane NoSchedule taint is removed after init so single-node clusters can schedule workloads (OpenEBS LocalPV, user pods).
+- The control-plane NoSchedule taint is removed after init so single-node clusters can schedule workloads (RawFile LocalPV/Longhorn, user pods).
 - All external commands are executed via async helpers in `cmd/` — never call `std::process::Command` or `tokio::process::Command` directly from other modules.
 - The project is fully async (tokio runtime) even though current operations are sequential, to support future concurrent operations.
 - Component versions are defined in `versions.toml`, paths/URLs/network defaults in `config.toml`. Both are compiled into the binary via `build.rs`. To update defaults, edit those files and rebuild.

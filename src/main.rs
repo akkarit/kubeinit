@@ -46,7 +46,11 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         gateway_api: bool,
 
-        /// OpenEBS LocalPV Provisioner version to install (e.g. 4.4.0)
+        /// Storage backend to install: "rawfile" (default) or "longhorn"
+        #[arg(long, default_value = "rawfile")]
+        storage_backend: String,
+
+        /// Storage version override (e.g. 0.13.1 for rawfile-localpv, 1.11.1 for Longhorn)
         #[arg(long)]
         storage_version: Option<String>,
 
@@ -141,6 +145,7 @@ async fn main() -> Result<()> {
             kubernetes_version,
             cilium_version,
             gateway_api,
+            storage_backend,
             storage_version,
             skip_cni,
             skip_storage,
@@ -176,7 +181,9 @@ async fn main() -> Result<()> {
             }
 
             if !skip_storage {
+                let backend = storage_backend.parse::<storage::StorageBackend>()?;
                 let storage_config = storage::StorageConfig {
+                    backend,
                     version: storage_version,
                 };
                 storage::install_storage(&storage_config).await?;

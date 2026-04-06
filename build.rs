@@ -28,7 +28,8 @@ fn main() {
         ("helm", "DEFAULT_HELM_VERSION"),
         ("cilium-cli", "DEFAULT_CILIUM_CLI_VERSION"),
         ("gateway-api", "DEFAULT_GATEWAY_API_VERSION"),
-        ("openebs-localpv", "DEFAULT_OPENEBS_LOCALPV_VERSION"),
+        ("rawfile-localpv", "DEFAULT_RAWFILE_LOCALPV_VERSION"),
+        ("longhorn", "DEFAULT_LONGHORN_VERSION"),
     ];
 
     code.push_str("// Generated from versions.toml\n");
@@ -89,7 +90,8 @@ fn main() {
         ("cilium_cli", "URL_CILIUM_CLI"),
         ("cilium_helm_repo", "URL_CILIUM_HELM_REPO"),
         ("gateway_api_crds", "URL_GATEWAY_API_CRDS"),
-        ("openebs_localpv_helm_repo", "URL_OPENEBS_LOCALPV_HELM_REPO"),
+        ("rawfile_localpv_helm_repo", "URL_RAWFILE_LOCALPV_HELM_REPO"),
+        ("longhorn_helm_repo", "URL_LONGHORN_HELM_REPO"),
     ];
     for (key, const_name) in &url_mapping {
         emit_str(&mut code, const_name, &config, &["urls", key]);
