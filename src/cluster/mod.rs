@@ -70,13 +70,35 @@ pub async fn preflight_checks() -> Result<()> {
     }
     info!("All required binaries found");
 
-    // Check that swap is disabled (kubeadm requirement)
+    // Disable swap if active (kubeadm requirement)
     let swap_info = cmd::run_output("cat", &["/proc/swaps"]).await.unwrap_or_default();
     let swap_lines: Vec<&str> = swap_info.lines().skip(1).filter(|l| !l.is_empty()).collect();
     if !swap_lines.is_empty() {
-        bail!("Swap is enabled. Disable swap before initializing the cluster: swapoff -a");
+        info!("Swap is enabled, disabling...");
+        cmd::run_privileged("swapoff", &["-a"]).await?;
+        // Persist across reboots by commenting out swap entries in fstab
+        cmd::run_privileged("sed", &[
+            "-i",
+            r#"/\bswap\b/s/^/#/"#,
+            "/etc/fstab",
+        ]).await?;
+        info!("Swap disabled and commented out in /etc/fstab");
+    } else {
+        info!("Swap is disabled");
     }
-    info!("Swap is disabled");
+
+    // Ensure containerd is running
+    if !cmd::binary_exists("containerd").await {
+        bail!("containerd not found. Run `kubeinit install-deps` first.");
+    }
+    let ctrd_active = cmd::run_output("systemctl", &["is-active", "containerd"])
+        .await
+        .unwrap_or_default();
+    if ctrd_active.trim() != "active" {
+        info!("Starting containerd...");
+        cmd::run_privileged("systemctl", &["enable", "--now", "containerd"]).await?;
+    }
+    info!("containerd is running");
 
     // Load required kernel modules, persisting across reboots
     let modules_loaded = cmd::run_output("lsmod", &[]).await.unwrap_or_default();
